@@ -1,11 +1,12 @@
 use std::env::var_os;
+use std::str::FromStr;
 
-use getopts;
+use clap::ArgMatches;
 
 use output::Colours;
 use output::{Grid, Details, GridDetails, Lines};
 use options::{FileFilter, DirAction, Misfire};
-use output::column::{Columns, TimeTypes, SizeFormat};
+use output::column::{Columns, SizeFormat};
 use term::dimensions;
 use fs::feature::xattr;
 
@@ -22,72 +23,49 @@ pub enum View {
 impl View {
 
     /// Determine which view to use and all of that view’s arguments.
-    pub fn deduce(matches: &getopts::Matches, filter: FileFilter, dir_action: DirAction) -> Result<View, Misfire> {
-        use options::misfire::Misfire::*;
-
+    pub fn deduce(matches: &ArgMatches, filter: FileFilter, dir_action: DirAction) -> Result<View, Misfire> {
         let colour_scale = || {
-            matches.opt_present("color-scale") || matches.opt_present("colour-scale")
+            matches.is_present("color-scale") 
         };
 
         let long = || {
-            if matches.opt_present("across") && !matches.opt_present("grid") {
-                Err(Useless("across", true, "long"))
-            }
-            else if matches.opt_present("oneline") {
-                Err(Useless("oneline", true, "long"))
-            }
-            else {
-                let term_colours = try!(TerminalColours::deduce(matches));
-                let colours = match term_colours {
-                    TerminalColours::Always    => Colours::colourful(colour_scale()),
-                    TerminalColours::Never     => Colours::plain(),
-                    TerminalColours::Automatic => {
-                        if dimensions().is_some() {
-                            Colours::colourful(colour_scale())
-                        }
-                        else {
-                            Colours::plain()
-                        }
-                    },
-                };
+            let term_colours = TerminalColours::from(matches);
+            let colours = match term_colours {
+                TerminalColours::Always    => Colours::colourful(colour_scale()),
+                TerminalColours::Never     => Colours::plain(),
+                TerminalColours::Automatic => {
+                    if dimensions().is_some() {
+                        Colours::colourful(colour_scale())
+                    }
+                    else {
+                        Colours::plain()
+                    }
+                },
+            };
 
-                let details = Details {
-                    columns: Some(try!(Columns::deduce(matches))),
-                    header: matches.opt_present("header"),
-                    recurse: dir_action.recurse_options(),
-                    filter: filter.clone(),
-                    xattr: xattr::ENABLED && matches.opt_present("extended"),
-                    colours: colours,
-                };
-
-                Ok(details)
-            }
-        };
-
-        let long_options_scan = || {
-            for option in &[ "binary", "bytes", "inode", "links", "header", "blocks", "time", "group" ] {
-                if matches.opt_present(option) {
-                    return Err(Useless(option, false, "long"));
-                }
-            }
-
-            if cfg!(feature="git") && matches.opt_present("git") {
-                Err(Useless("git", false, "long"))
-            }
-            else if matches.opt_present("level") && !matches.opt_present("recurse") && !matches.opt_present("tree") {
-                Err(Useless2("level", "recurse", "tree"))
-            }
-            else if xattr::ENABLED && matches.opt_present("extended") {
-                Err(Useless("extended", false, "long"))
-            }
-            else {
-                Ok(())
+            Details {
+                columns: Some(Columns::from(matches)),
+                header: matches.is_present("header"),
+                recurse: dir_action.recurse_options(),
+                filter: filter.clone(),
+                xattr: xattr::ENABLED && matches.is_present("extended"),
+                colours: colours,
             }
         };
 
         let other_options_scan = || {
-            let term_colours = try!(TerminalColours::deduce(matches));
+            let term_colours = TerminalColours::from(matches);
             let term_width   = try!(TerminalWidth::deduce());
+            let details = |colours| {
+                Details {
+                    columns: None,
+                    header: false,
+                    recurse: dir_action.recurse_options(),
+                    filter: filter.clone(),  // TODO: clone
+                    xattr: false,
+                    colours: colours,
+                }
+            };
 
             if let Some(&width) = term_width.as_ref() {
                 let colours = match term_colours {
@@ -96,33 +74,15 @@ impl View {
                     TerminalColours::Automatic => Colours::colourful(colour_scale()),
                 };
 
-                if matches.opt_present("oneline") {
-                    if matches.opt_present("across") {
-                        Err(Useless("across", true, "oneline"))
-                    }
-                    else {
-                        let lines = Lines {
-                             colours: colours,
-                        };
-
-                        Ok(View::Lines(lines))
-                    }
+                if matches.is_present("oneline") {
+                    Ok(View::Lines(Lines { colours: colours }))
                 }
-                else if matches.opt_present("tree") {
-                    let details = Details {
-                        columns: None,
-                        header: false,
-                        recurse: dir_action.recurse_options(),
-                        filter: filter.clone(),  // TODO: clone
-                        xattr: false,
-                        colours: colours,
-                    };
-
-                    Ok(View::Details(details))
+                else if matches.is_present("tree") {
+                    Ok(View::Details(details(colours)))
                 }
                 else {
                     let grid = Grid {
-                        across: matches.opt_present("across"),
+                        across: matches.is_present("across"),
                         console_width: width,
                         colours: colours,
                     };
@@ -141,44 +101,29 @@ impl View {
                     TerminalColours::Automatic => Colours::plain(),
                 };
 
-                if matches.opt_present("tree") {
-                    let details = Details {
-                        columns: None,
-                        header: false,
-                        recurse: dir_action.recurse_options(),
-                        filter: filter.clone(),
-                        xattr: false,
-                        colours: colours,
-                    };
-
-                    Ok(View::Details(details))
+                if matches.is_present("tree") {
+                    Ok(View::Details(details(colours)))
                 }
                 else {
-                    let lines = Lines {
-                         colours: colours,
-                    };
-
-                    Ok(View::Lines(lines))
+                    Ok(View::Lines(Lines { colours: colours }))
                 }
             }
         };
 
-        if matches.opt_present("long") {
-            let long_options = try!(long());
+        if matches.is_present("long") {
+            let long_options = long();
 
-            if matches.opt_present("grid") {
+            if matches.is_present("grid") {
                 match other_options_scan() {
                     Ok(View::Grid(grid)) => return Ok(View::GridDetails(GridDetails { grid: grid, details: long_options })),
                     Ok(lines)            => return Ok(lines),
-                    Err(e)               => return Err(e),
+                    _                    => unreachable!()
                 };
             }
             else {
                 return Ok(View::Details(long_options));
             }
         }
-
-        try!(long_options_scan());
 
         other_options_scan()
     }
@@ -228,23 +173,7 @@ impl TerminalWidth {
     }
 }
 
-
-impl Columns {
-    fn deduce(matches: &getopts::Matches) -> Result<Columns, Misfire> {
-        Ok(Columns {
-            size_format: try!(SizeFormat::deduce(matches)),
-            time_types:  try!(TimeTypes::deduce(matches)),
-            inode:  matches.opt_present("inode"),
-            links:  matches.opt_present("links"),
-            blocks: matches.opt_present("blocks"),
-            group:  matches.opt_present("group"),
-            git:    cfg!(feature="git") && matches.opt_present("git"),
-        })
-    }
-}
-
-
-impl SizeFormat {
+impl<'a> From<&'a ArgMatches<'a>> for SizeFormat {
 
     /// Determine which file size to use in the file size column based on
     /// the user’s options.
@@ -254,62 +183,13 @@ impl SizeFormat {
     /// strings of digits in your head. Changing the format to anything else
     /// involves the `--binary` or `--bytes` flags, and these conflict with
     /// each other.
-    fn deduce(matches: &getopts::Matches) -> Result<SizeFormat, Misfire> {
-        let binary = matches.opt_present("binary");
-        let bytes  = matches.opt_present("bytes");
-
-        match (binary, bytes) {
-            (true,  true )  => Err(Misfire::Conflict("binary", "bytes")),
-            (true,  false)  => Ok(SizeFormat::BinaryBytes),
-            (false, true )  => Ok(SizeFormat::JustBytes),
-            (false, false)  => Ok(SizeFormat::DecimalBytes),
-        }
-    }
-}
-
-
-impl TimeTypes {
-
-    /// Determine which of a file’s time fields should be displayed for it
-    /// based on the user’s options.
-    ///
-    /// There are two separate ways to pick which fields to show: with a
-    /// flag (such as `--modified`) or with a parameter (such as
-    /// `--time=modified`). An error is signaled if both ways are used.
-    ///
-    /// It’s valid to show more than one column by passing in more than one
-    /// option, but passing *no* options means that the user just wants to
-    /// see the default set.
-    fn deduce(matches: &getopts::Matches) -> Result<TimeTypes, Misfire> {
-        let possible_word = matches.opt_str("time");
-        let modified = matches.opt_present("modified");
-        let created  = matches.opt_present("created");
-        let accessed = matches.opt_present("accessed");
-
-        if let Some(word) = possible_word {
-            if modified {
-                return Err(Misfire::Useless("modified", true, "time"));
-            }
-            else if created {
-                return Err(Misfire::Useless("created", true, "time"));
-            }
-            else if accessed {
-                return Err(Misfire::Useless("accessed", true, "time"));
-            }
-
-            match &*word {
-                "mod" | "modified"  => Ok(TimeTypes { accessed: false, modified: true,  created: false }),
-                "acc" | "accessed"  => Ok(TimeTypes { accessed: true,  modified: false, created: false }),
-                "cr"  | "created"   => Ok(TimeTypes { accessed: false, modified: false, created: true  }),
-                otherwise           => Err(Misfire::bad_argument("time", otherwise,
-                                                                 &["modified", "accessed", "created"])),
-            }
-        }
-        else if modified || created || accessed {
-            Ok(TimeTypes { accessed: accessed, modified: modified, created: created })
-        }
-        else {
-            Ok(TimeTypes::default())
+    fn from(matches: &ArgMatches<'a>) -> Self {
+        if matches.is_present("binary") {
+            SizeFormat::BinaryBytes
+        } else if matches.is_present("bytes") {
+            SizeFormat::JustBytes
+        } else {
+            SizeFormat::DecimalBytes
         }
     }
 }
@@ -335,27 +215,20 @@ enum TerminalColours {
     Never,
 }
 
-impl Default for TerminalColours {
-    fn default() -> TerminalColours {
-        TerminalColours::Automatic
+impl FromStr for TerminalColours {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
+        match s {
+            "always"              => Ok(TerminalColours::Always),
+            "auto" | "automatic"  => Ok(TerminalColours::Automatic),
+            "never"               => Ok(TerminalColours::Never),
+            _                     => unreachable!()
+        }
     }
 }
 
-impl TerminalColours {
-
-    /// Determine which terminal colour conditions to use.
-    fn deduce(matches: &getopts::Matches) -> Result<TerminalColours, Misfire> {
-        if let Some(word) = matches.opt_str("color").or(matches.opt_str("colour")) {
-            match &*word {
-                "always"              => Ok(TerminalColours::Always),
-                "auto" | "automatic"  => Ok(TerminalColours::Automatic),
-                "never"               => Ok(TerminalColours::Never),
-                otherwise             => Err(Misfire::bad_argument("color", otherwise,
-                                                                   &["always", "auto", "never"]))
-            }
-        }
-        else {
-            Ok(TerminalColours::default())
-        }
+impl<'a> From<&'a ArgMatches<'a>> for TerminalColours {
+    fn from(matches: &ArgMatches<'a>) -> Self {
+        matches.value_of("color").unwrap().parse().unwrap()
     }
 }

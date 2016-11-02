@@ -1,9 +1,7 @@
 use std::fmt;
 use std::num::ParseIntError;
 
-use getopts;
 use glob;
-
 
 /// A list of legal choices for an argument-taking option
 #[derive(PartialEq, Debug)]
@@ -19,12 +17,6 @@ impl fmt::Display for Choices {
 /// catch-all for anything outside the program’s normal execution.
 #[derive(PartialEq, Debug)]
 pub enum Misfire {
-
-    /// The getopts crate didn’t like these arguments.
-    InvalidOptions(getopts::Fail),
-
-    /// The user supplied an illegal choice to an argument
-    BadArgument(getopts::Fail, Choices),
 
     /// The user asked for help. This isn’t strictly an error, which is why
     /// this enum isn’t named Error!
@@ -58,16 +50,6 @@ impl Misfire {
         if let Misfire::Help(_) = *self { 2 }
                                    else { 3 }
     }
-
-    /// The Misfire that happens when an option gets given the wrong
-    /// argument. This has to use one of the `getopts` failure
-    /// variants--it’s meant to take just an option name, rather than an
-    /// option *and* an argument, but it works just as well.
-    pub fn bad_argument(option: &str, otherwise: &str, legal: &[&'static str]) -> Misfire {
-        Misfire::BadArgument(getopts::Fail::UnrecognizedOption(format!(
-            "--{} {}",
-            option, otherwise)), Choices(legal.into()))
-    }
 }
 
 impl From<glob::PatternError> for Misfire {
@@ -81,8 +63,6 @@ impl fmt::Display for Misfire {
         use self::Misfire::*;
 
         match *self {
-            InvalidOptions(ref e)      => write!(f, "{}", e),
-            BadArgument(ref e, ref c)  => write!(f, "{} {}", e, c),
             Help(ref text)             => write!(f, "{}", text),
             Version                    => write!(f, "exa {}", env!("CARGO_PKG_VERSION")),
             Conflict(a, b)             => write!(f, "Option --{} conflicts with option {}.", a, b),

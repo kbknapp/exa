@@ -1,6 +1,6 @@
 [package]
 name = "exa"
-version = "0.4.0"
+version = "0.5.0"
 authors = [ "ogham@bsago.me" ]
 
 [[bin]]
@@ -15,7 +15,7 @@ path = "src/exa.rs"
 ansi_term = "0.7.1"
 bitflags = "0.1"
 datetime = "0.4.3"
-getopts = "0.2.14"
+clap = "2.17.1"
 glob = "0.2"
 lazy_static = "0.1.*"
 libc = "0.2.9"

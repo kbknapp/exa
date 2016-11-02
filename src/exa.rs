@@ -3,7 +3,7 @@
 
 extern crate ansi_term;
 extern crate datetime;
-extern crate getopts;
+#[macro_use] extern crate clap;
 extern crate glob;
 extern crate libc;
 extern crate locale;
@@ -19,7 +19,6 @@ extern crate zoneinfo_compiled;
 #[cfg(feature="git")] extern crate git2;
 #[macro_use] extern crate lazy_static;
 
-use std::ffi::OsStr;
 use std::io::{stderr, Write, Result as IOResult};
 use std::path::{Component, Path};
 
@@ -32,6 +31,7 @@ mod info;
 mod options;
 mod output;
 mod term;
+mod cli;
 
 
 /// The main program wrapper.
@@ -44,41 +44,33 @@ pub struct Exa<'w, W: Write + 'w> {
     /// this will be `std::io::Stdout`, but it can accept any struct that’s
     /// `Write` so we can write into, say, a vector for testing.
     pub writer: &'w mut W,
-
-    /// List of the free command-line arguments that should correspond to file
-    /// names (anything that isn’t an option).
-    pub args: Vec<String>,
 }
 
 impl<'w, W: Write + 'w> Exa<'w, W> {
-    pub fn new<S>(args: &[S], writer: &'w mut W) -> Result<Exa<'w, W>, Misfire>
-    where S: AsRef<OsStr> {
-        Options::getopts(args).map(move |(opts, args)| Exa {
-            options: opts,
-            writer:  writer,
-            args:    args,
-        })
+    pub fn new(writer: &'w mut W) -> Result<Exa<'w, W>, Misfire> {
+        let matches = cli::build_cli().get_matches();
+        Ok(
+            Exa {
+                options: try!(Options::from_matches(matches)),
+                writer: writer,
+            }
+        )
     }
 
     pub fn run(&mut self) -> IOResult<()> {
         let mut files = Vec::new();
         let mut dirs = Vec::new();
 
-        // List the current directory by default, like ls.
-        if self.args.is_empty() {
-            self.args.push(".".to_owned());
-        }
-
-        for file_name in self.args.iter() {
+        for file_name in &self.options.paths {
             match File::from_path(Path::new(&file_name), None) {
                 Err(e) => {
-                    try!(writeln!(stderr(), "{}: {}", file_name, e));
+                    try!(writeln!(stderr(), "{}: {}", file_name.to_string_lossy(), e));
                 },
                 Ok(f) => {
                     if f.is_directory() && !self.options.dir_action.treat_dirs_as_files() {
                         match f.to_dir(self.options.should_scan_for_git()) {
                             Ok(d) => dirs.push(d),
-                            Err(e) => try!(writeln!(stderr(), "{}: {}", file_name, e)),
+                            Err(e) => try!(writeln!(stderr(), "{}: {}", file_name.to_string_lossy(), e)),
                         }
                     }
                     else {
@@ -92,7 +84,7 @@ impl<'w, W: Write + 'w> Exa<'w, W> {
         // the case where it’s the only directory, *except* if there are any
         // files to print as well. (It’s a double negative)
 
-        let no_files = files.is_empty();
+        let no_files = files.len() == 1; // There will always be at least "."
         let is_only_dir = dirs.len() == 1 && no_files;
 
         self.options.filter.filter_argument_files(&mut files);

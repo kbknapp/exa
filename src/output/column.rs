@@ -1,5 +1,8 @@
-use fs::Dir;
+use std::str::FromStr;
 
+use clap::ArgMatches;
+
+use fs::Dir;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Column {
@@ -119,6 +122,19 @@ impl Columns {
     }
 }
 
+impl<'a> From<&'a ArgMatches<'a>> for Columns {
+    fn from(matches: &ArgMatches<'a>) -> Self {
+        Columns {
+            size_format: SizeFormat::from(matches),
+            time_types:  TimeTypes::from(matches),
+            inode:  matches.is_present("inode"),
+            links:  matches.is_present("links"),
+            blocks: matches.is_present("blocks"),
+            group:  matches.is_present("group"),
+            git:    cfg!(feature="git") && matches.is_present("git"),
+        }
+    }
+}
 
 /// Formatting options for file sizes.
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -141,7 +157,6 @@ impl Default for SizeFormat {
         SizeFormat::DecimalBytes
     }
 }
-
 
 /// The types of a file’s time fields. These three fields are standard
 /// across most (all?) operating systems.
@@ -170,7 +185,6 @@ impl TimeType {
     }
 }
 
-
 /// Fields for which of a file’s time fields should be displayed in the
 /// columns output.
 ///
@@ -183,11 +197,47 @@ pub struct TimeTypes {
     pub created:  bool,
 }
 
-impl Default for TimeTypes {
+impl<'a> From<&'a ArgMatches<'a>> for TimeTypes {
 
-    /// By default, display just the ‘modified’ time. This is the most
-    /// common option, which is why it has this shorthand.
-    fn default() -> TimeTypes {
-        TimeTypes { accessed: false, modified: true, created: false }
+    /// Determine which of a file’s time fields should be displayed for it
+    /// based on the user’s options.
+    ///
+    /// There are two separate ways to pick which fields to show: with a
+    /// flag (such as `--modified`) or with a parameter (such as
+    /// `--time=modified`). An error is signaled if both ways are used.
+    ///
+    /// It’s valid to show more than one column by passing in more than one
+    /// option, but passing *no* options means that the user just wants to
+    /// see the default set.
+    fn from(matches: &ArgMatches<'a>) -> TimeTypes {
+        let modified = matches.is_present("modified");
+        let created  = matches.is_present("created");
+        let accessed = matches.is_present("accessed");
+
+        if let Some(word) = matches.value_of("time") {
+            word.parse().unwrap()
+        }
+        else {
+            TimeTypes { accessed: accessed, modified: modified, created: created }
+        }
+    }
+}
+
+impl Default for TimeTypes {
+    fn default() -> Self {
+        TimeTypes { accessed: false, modified: true,  created: false }       
+    }
+}
+
+impl FromStr for TimeTypes {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
+        match s {
+            "mod" | "modified"  => Ok(TimeTypes { accessed: false, modified: true,  created: false }),
+            "acc" | "accessed"  => Ok(TimeTypes { accessed: true,  modified: false, created: false }),
+            "cr"  | "created"   => Ok(TimeTypes { accessed: false, modified: false, created: true  }),
+            _                   => unreachable!()
+        }
     }
 }

@@ -1,7 +1,6 @@
-use getopts;
+use clap::ArgMatches;
 
 use options::misfire::Misfire;
-
 
 /// What to do when encountering a directory?
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -24,22 +23,15 @@ pub enum DirAction {
 impl DirAction {
 
     /// Determine which action to perform when trying to list a directory.
-    pub fn deduce(matches: &getopts::Matches) -> Result<DirAction, Misfire> {
-        let recurse = matches.opt_present("recurse");
-        let list    = matches.opt_present("list-dirs");
-        let tree    = matches.opt_present("tree");
-
-        match (recurse, list, tree) {
-
-            // You can't --list-dirs along with --recurse or --tree because
-            // they already automatically list directories.
-            (true,  true,  _    )  => Err(Misfire::Conflict("recurse", "list-dirs")),
-            (_,     true,  true )  => Err(Misfire::Conflict("tree", "list-dirs")),
-
-            (_   ,  _,     true )  => Ok(DirAction::Recurse(try!(RecurseOptions::deduce(matches, true)))),
-            (true,  false, false)  => Ok(DirAction::Recurse(try!(RecurseOptions::deduce(matches, false)))),
-            (false, true,  _    )  => Ok(DirAction::AsFile),
-            (false, false, _    )  => Ok(DirAction::List),
+    pub fn deduce(matches: &ArgMatches) -> Result<DirAction, Misfire> {
+        if matches.is_present("recurse") {
+            Ok(DirAction::Recurse(try!(RecurseOptions::deduce(matches, false))))
+        } else if matches.is_present("list-dirs") {
+            Ok(DirAction::AsFile)
+        } else if matches.is_present("tree") {
+            Ok(DirAction::Recurse(try!(RecurseOptions::deduce(matches, true))))
+        } else {
+            Ok(DirAction::List)
         }
     }
 
@@ -61,7 +53,6 @@ impl DirAction {
     }
 }
 
-
 /// The options that determine how to recurse into a directory.
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct RecurseOptions {
@@ -78,8 +69,8 @@ pub struct RecurseOptions {
 impl RecurseOptions {
 
     /// Determine which files should be recursed into.
-    pub fn deduce(matches: &getopts::Matches, tree: bool) -> Result<RecurseOptions, Misfire> {
-        let max_depth = if let Some(level) = matches.opt_str("level") {
+    pub fn deduce(matches: &ArgMatches, tree: bool) -> Result<RecurseOptions, Misfire> {
+        let max_depth = if let Some(level) = matches.value_of("level") {
             match level.parse() {
                 Ok(l)   => Some(l),
                 Err(e)  => return Err(Misfire::FailedParse(e)),

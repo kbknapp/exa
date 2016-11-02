@@ -1,8 +1,7 @@
-use std::ffi::OsStr;
+use std::path::PathBuf;
 
-use getopts;
+use clap::ArgMatches;
 
-use fs::feature::xattr;
 use output::{Details, GridDetails};
 
 mod dir_action;
@@ -10,9 +9,6 @@ pub use self::dir_action::{DirAction, RecurseOptions};
 
 mod filter;
 pub use self::filter::{FileFilter, SortField, SortCase};
-
-mod help;
-use self::help::*;
 
 mod misfire;
 pub use self::misfire::Misfire;
@@ -35,93 +31,25 @@ pub struct Options {
 
     /// The type of output to use (lines, grid, or details).
     pub view: View,
+
+    /// A list of files/dirs to display
+    pub paths: Vec<PathBuf>,
 }
 
 impl Options {
+    /// Determines the complete set of options based on the given command-line
+    /// arguments, after they’ve been parsed.
+    pub fn from_matches(matches: ArgMatches) -> Result<Options, Misfire> {
+        let dir_action = try!(DirAction::deduce(&matches));
+        let filter = try!(FileFilter::deduce(&matches));
+        let view = try!(View::deduce(&matches, filter.clone(), dir_action));
 
-    /// Call getopts on the given slice of command-line strings.
-    #[allow(unused_results)]
-    pub fn getopts<S>(args: &[S]) -> Result<(Options, Vec<String>), Misfire>
-    where S: AsRef<OsStr> {
-        let mut opts = getopts::Options::new();
-
-        opts.optflag("v", "version",   "display version of exa");
-        opts.optflag("?", "help",      "show list of command-line options");
-
-        // Display options
-        opts.optflag("1", "oneline",      "display one entry per line");
-        opts.optflag("G", "grid",         "display entries in a grid view (default)");
-        opts.optflag("l", "long",         "display extended details and attributes");
-        opts.optflag("R", "recurse",      "recurse into directories");
-        opts.optflag("T", "tree",         "recurse into subdirectories in a tree view");
-        opts.optflag("x", "across",       "sort multi-column view entries across");
-        opts.optopt ("",  "color",        "when to show anything in colours", "WHEN");
-        opts.optopt ("",  "colour",       "when to show anything in colours (alternate spelling)", "WHEN");
-        opts.optflag("",  "color-scale",  "use a colour scale when displaying file sizes (alternate spelling)");
-        opts.optflag("",  "colour-scale", "use a colour scale when displaying file sizes");
-
-        // Filtering and sorting options
-        opts.optflag("",  "group-directories-first", "list directories before other files");
-        opts.optflag("a", "all",         "show dot-files");
-        opts.optflag("d", "list-dirs",   "list directories as regular files");
-        opts.optflag("r", "reverse",     "reverse order of files");
-        opts.optopt ("s", "sort",        "field to sort by", "WORD");
-        opts.optopt ("I", "ignore-glob", "patterns (|-separated) of names to ignore", "GLOBS");
-
-        // Long view options
-        opts.optflag("b", "binary",    "use binary prefixes in file sizes");
-        opts.optflag("B", "bytes",     "list file sizes in bytes, without prefixes");
-        opts.optflag("g", "group",     "show group as well as user");
-        opts.optflag("h", "header",    "show a header row at the top");
-        opts.optflag("H", "links",     "show number of hard links");
-        opts.optflag("i", "inode",     "show each file's inode number");
-        opts.optopt ("L", "level",     "maximum depth of recursion", "DEPTH");
-        opts.optflag("m", "modified",  "display timestamp of most recent modification");
-        opts.optflag("S", "blocks",    "show number of file system blocks");
-        opts.optopt ("t", "time",      "which timestamp to show for a file", "WORD");
-        opts.optflag("u", "accessed",  "display timestamp of last access for a file");
-        opts.optflag("U", "created",   "display timestamp of creation for a file");
-
-        if cfg!(feature="git") {
-            opts.optflag("", "git", "show git status");
-        }
-
-        if xattr::ENABLED {
-            opts.optflag("@", "extended", "display extended attribute keys and sizes");
-        }
-
-        let matches = match opts.parse(args) {
-            Ok(m)   => m,
-            Err(e)  => return Err(Misfire::InvalidOptions(e)),
-        };
-
-        if matches.opt_present("help") {
-            let mut help_string = "Usage:\n  exa [options] [files...]\n".to_owned();
-
-            if !matches.opt_present("long") {
-                help_string.push_str(OPTIONS);
-            }
-
-            help_string.push_str(LONG_OPTIONS);
-
-            if cfg!(feature="git") {
-                help_string.push_str(GIT_HELP);
-                help_string.push('\n');
-            }
-
-            if xattr::ENABLED {
-                help_string.push_str(EXTENDED_HELP);
-                help_string.push('\n');
-            }
-
-            return Err(Misfire::Help(help_string));
-        }
-        else if matches.opt_present("version") {
-            return Err(Misfire::Version);
-        }
-
-        let options = try!(Options::deduce(&matches));
-        Ok((options, matches.free))
+        Ok(Options {
+            dir_action: dir_action,
+            view:       view,
+            filter:     filter,  // TODO: clone
+            paths:      matches.values_of("paths").unwrap().map(|p| p.into()).collect(),
+        })
     }
 
     /// Whether the View specified in this set of options includes a Git
@@ -134,20 +62,6 @@ impl Options {
             _ => false,
         }
     }
-
-    /// Determines the complete set of options based on the given command-line
-    /// arguments, after they’ve been parsed.
-    fn deduce(matches: &getopts::Matches) -> Result<Options, Misfire> {
-        let dir_action = try!(DirAction::deduce(&matches));
-        let filter = try!(FileFilter::deduce(&matches));
-        let view = try!(View::deduce(&matches, filter.clone(), dir_action));
-
-        Ok(Options {
-            dir_action: dir_action,
-            view:       view,
-            filter:     filter,  // TODO: clone
-        })
-    }
 }
 
 
@@ -156,36 +70,10 @@ mod test {
     use super::{Options, Misfire, SortField, SortCase};
     use fs::feature::xattr;
 
-    fn is_helpful<T>(misfire: Result<T, Misfire>) -> bool {
-        match misfire {
-            Err(Misfire::Help(_)) => true,
-            _                     => false,
-        }
-    }
-
-    #[test]
-    fn help() {
-        let opts = Options::getopts(&[ "--help".to_string() ]);
-        assert!(is_helpful(opts))
-    }
-
-    #[test]
-    fn help_with_file() {
-        let opts = Options::getopts(&[ "--help".to_string(), "me".to_string() ]);
-        assert!(is_helpful(opts))
-    }
-
     #[test]
     fn files() {
         let args = Options::getopts(&[ "this file".to_string(), "that file".to_string() ]).unwrap().1;
         assert_eq!(args, vec![ "this file".to_string(), "that file".to_string() ])
-    }
-
-    #[test]
-    fn no_args() {
-        let nothing: Vec<String> = Vec::new();
-        let args = Options::getopts(&nothing).unwrap().1;
-        assert!(args.is_empty());  // Listing the `.` directory is done in main.rs
     }
 
     #[test]

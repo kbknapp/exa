@@ -1,7 +1,8 @@
+use std::str::FromStr;
 use std::cmp::Ordering;
 use std::os::unix::fs::MetadataExt;
 
-use getopts;
+use clap::ArgMatches;
 use glob;
 use natord;
 
@@ -71,12 +72,12 @@ impl FileFilter {
 
     /// Determines the set of file filter options to use, based on the user’s
     /// command-line arguments.
-    pub fn deduce(matches: &getopts::Matches) -> Result<FileFilter, Misfire> {
+    pub fn deduce(matches: &ArgMatches) -> Result<FileFilter, Misfire> {
         Ok(FileFilter {
-            list_dirs_first: matches.opt_present("group-directories-first"),
-            reverse:         matches.opt_present("reverse"),
-            sort_field:      try!(SortField::deduce(matches)),
-            show_invisibles: matches.opt_present("all"),
+            list_dirs_first: matches.is_present("group-directories-first"),
+            reverse:         matches.is_present("reverse"),
+            sort_field:      SortField::deduce(matches),
+            show_invisibles: matches.is_present("all"),
             ignore_patterns: try!(IgnorePatterns::deduce(matches)),
         })
     }
@@ -199,6 +200,32 @@ pub enum SortField {
     CreatedDate,
 }
 
+impl FromStr for SortField {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
+        match s {
+            "name" | "filename"   => Ok(SortField::Name(SortCase::Sensitive)),
+            "Name" | "Filename"   => Ok(SortField::Name(SortCase::Insensitive)),
+            "size" | "filesize"   => Ok(SortField::Size),
+            "ext"  | "extension"  => Ok(SortField::Extension(SortCase::Sensitive)),
+            "Ext"  | "Extension"  => Ok(SortField::Extension(SortCase::Insensitive)),
+            "mod"  | "modified"   => Ok(SortField::ModifiedDate),
+            "acc"  | "accessed"   => Ok(SortField::AccessedDate),
+            "cr"   | "created"    => Ok(SortField::CreatedDate),
+            "none"                => Ok(SortField::Unsorted),
+            "inode"               => Ok(SortField::FileInode),
+            _                     => unreachable!()
+        }
+    }
+}
+
+impl Default for SortField {
+    fn default() -> Self {
+        SortField::Unsorted
+    }
+}
+
 /// Whether a field should be sorted case-sensitively or case-insensitively.
 ///
 /// This determines which of the `natord` functions to use.
@@ -213,39 +240,13 @@ pub enum SortCase {
     Insensitive,
 }
 
-impl Default for SortField {
-    fn default() -> SortField {
-        SortField::Name(SortCase::Sensitive)
-    }
-}
-
 impl SortField {
 
     /// Determine the sort field to use, based on the presence of a “sort”
     /// argument. This will return `Err` if the option is there, but does not
     /// correspond to a valid field.
-    fn deduce(matches: &getopts::Matches) -> Result<SortField, Misfire> {
-        if let Some(word) = matches.opt_str("sort") {
-            match &*word {
-                "name" | "filename"   => Ok(SortField::Name(SortCase::Sensitive)),
-                "Name" | "Filename"   => Ok(SortField::Name(SortCase::Insensitive)),
-                "size" | "filesize"   => Ok(SortField::Size),
-                "ext"  | "extension"  => Ok(SortField::Extension(SortCase::Sensitive)),
-                "Ext"  | "Extension"  => Ok(SortField::Extension(SortCase::Insensitive)),
-                "mod"  | "modified"   => Ok(SortField::ModifiedDate),
-                "acc"  | "accessed"   => Ok(SortField::AccessedDate),
-                "cr"   | "created"    => Ok(SortField::CreatedDate),
-                "none"                => Ok(SortField::Unsorted),
-                "inode"               => Ok(SortField::FileInode),
-                field                 => Err(Misfire::bad_argument("sort", field, &[
-                                            "name", "Name", "size", "extension", "Extension",
-                                            "modified", "accessed", "created", "inode", "none"]
-                ))
-            }
-        }
-        else {
-            Ok(SortField::default())
-        }
+    fn deduce(matches: &ArgMatches) -> SortField {
+        matches.value_of("sort").unwrap().parse().unwrap()
     }
 }
 
@@ -258,14 +259,14 @@ struct IgnorePatterns {
 impl IgnorePatterns {
     /// Determines the set of file filter options to use, based on the user’s
     /// command-line arguments.
-    pub fn deduce(matches: &getopts::Matches) -> Result<IgnorePatterns, Misfire> {
-        let patterns = match matches.opt_str("ignore-glob") {
-            None => Ok(Vec::new()),
-            Some(is) => is.split('|').map(|a| glob::Pattern::new(a)).collect(),
+    pub fn deduce(matches: &ArgMatches) -> Result<IgnorePatterns, Misfire> {
+        let patterns = match matches.values_of("ignore-glob") {
+            None => Vec::new(),
+            Some(is) => is.map(|a| glob::Pattern::new(a).unwrap()).collect(),
         };
 
         Ok(IgnorePatterns {
-            patterns: try!(patterns),
+            patterns: patterns,
         })
     }
 
